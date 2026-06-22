@@ -4,6 +4,7 @@ from airflow.operators.python import PythonOperator
 import os
 import pandas as pd
 import random
+from google.cloud import storage
 
 default_args = {
     'owner': 'dataquest',
@@ -63,20 +64,27 @@ def transform_events():
     df_sorted.to_csv(transformed_path, index=False)
     print(f"Transformed {len(df_sorted)} events → {transformed_path}")
 
-# -------------------------------------------------------------------
-# Task 3 will go here in our next lesson:
-# We'll add an upload_to_gcs() function that sends the transformed
-# CSV to a Google Cloud Storage bucket. This requires:
-#   - The google-cloud-storage Python library
-#   - A GCS bucket
-#   - A service account with write permissions
-# All of that gets configured when we connect to GCS.
-# -------------------------------------------------------------------
+def upload_to_gcs(**kwargs):
+    """
+    Upload the transformed CSV to Google Cloud Storage.
+    The run_date comes from Airflow's task context — it's the
+    logical execution date of the DAG run, which we use to
+    create a unique filename for each day's output.
+    """
+    run_date = kwargs['ds']
+    bucket_name = 'your-bucket-name' # <-- replace with your actual bucket name
+    destination = f'events/events_transformed_{run_date}.csv'
+
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(destination)
+    blob.upload_from_filename(transformed_path)
+    print(f"Uploaded → gs://{bucket_name}/{destination}")
 
 with DAG(
     dag_id="etl_events_pipeline",
     default_args=default_args,
-    description="Generate and transform event data daily",
+    description="Generate, transform, and upload event data daily",
     start_date=datetime(2026, 5, 18),
     schedule="@daily",
     catchup=False,
@@ -92,7 +100,9 @@ with DAG(
         python_callable=transform_events,
     )
 
-    # In our next lesson, we'll add: upload = PythonOperator(...)
-    # and extend the chain to: extract >> transform >> upload
+    upload = PythonOperator(
+        task_id="upload_to_gcs",
+        python_callable=upload_to_gcs,
+    )
 
-    extract >> transform
+    extract >> transform >> upload
